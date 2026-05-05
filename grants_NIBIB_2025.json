@@ -1,0 +1,102 @@
+[
+  {
+    "appl_id": 11317667,
+    "project_num": "1R13EB038853-01",
+    "organization": {
+      "org_name": "GORDON RESEARCH CONFERENCES",
+      "city": null,
+      "country": null,
+      "org_city": "East Greenwich",
+      "org_country": "UNITED STATES",
+      "org_state": "RI",
+      "org_state_name": null,
+      "dept_type": null,
+      "fips_country_code": null,
+      "org_duns": [
+        "075712877"
+      ],
+      "org_ueis": [
+        "XL5ANMKWN557"
+      ],
+      "primary_duns": "075712877",
+      "primary_uei": "XL5ANMKWN557",
+      "org_fips": "US",
+      "org_ipf_code": "2988701",
+      "org_zipcode": "028183465",
+      "external_org_id": 2988701
+    },
+    "activity_code": "R13",
+    "award_amount": 7140,
+    "project_start_date": "2026-01-30T00:00:00",
+    "project_end_date": "2027-01-31T00:00:00",
+    "award_notice_date": "2026-01-30T00:00:00",
+    "project_title": "2026 Atomically Precise Nanochemistry Gordon Research Conference and Gordon Research Seminar"
+  },
+  {
+    "appl_id": 11279309,
+    "project_num": "1R01EB038366-01",
+    "organization": {
+      "org_name": "UNIVERSITY OF NOTRE DAME",
+      "city": null,
+      "country": null,
+      "org_city": "NOTRE DAME",
+      "org_country": "UNITED STATES",
+      "org_state": "IN",
+      "org_state_name": null,
+      "dept_type": "ENGINEERING (ALL TYPES)",
+      "fips_country_code": null,
+      "org_duns": [
+        "824910376"
+      ],
+      "org_ueis": [
+        "FPU6XGFXMBE9"
+      ],
+      "primary_duns": "824910376",
+      "primary_uei": "FPU6XGFXMBE9",
+      "org_fips": "US",
+      "org_ipf_code": "6169301",
+      "org_zipcode": "465565708",
+      "external_org_id": 6169301
+    },
+    "activity_code": "R01",
+    "award_amount": 662737,
+    "project_start_date": "2026-03-05T00:00:00",
+    "project_end_date": "2030-02-28T00:00:00",
+    "award_notice_date": "2026-03-02T00:00:00",
+    "project_title": "Autonomous Hybrid Bioprinting of Hierarchical Perfusable Vascularized Liver Tissues"
+  },
+  {
+    "appl_id": 11320025,
+    "project_num": "1R01EB037403-01A1",
+    "organization": {
+      "org_name": "VANDERBILT UNIVERSITY",
+      "city": null,
+      "country": null,
+      "org_city": "Nashville",
+      "org_country": "UNITED STATES",
+      "org_state": "TN",
+      "org_state_name": null,
+      "dept_type": "BIOMEDICAL ENGINEERING",
+      "fips_country_code": null,
+      "org_duns": [
+        "965717143"
+      ],
+      "org_ueis": [
+        "DWH7MSXKA2A8",
+        " GTNBNWXJ12D5"
+      ],
+      "primary_duns": "965717143",
+      "primary_uei": "GTNBNWXJ12D5",
+      "org_fips": "US",
+      "org_ipf_code": "8721001",
+      "org_zipcode": "372032408",
+      "external_org_id": 8721001
+    },
+    "activity_code": "R01",
+    "award_amount": 542947,
+    "project_start_date": "2026-03-03T00:00:00",
+    "project_end_date": "2030-02-28T00:00:00",
+    "award_notice_date": "2026-03-02T00:00:00",
+    "project_title": "Transcranial Functional Ultrasound in Adult Humans"
+  }
+]
