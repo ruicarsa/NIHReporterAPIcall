@@ -1,11 +1,11 @@
 """
 NIH RePORTER – Flask web interface
-Run: flask run --port 5000
+Render deployment version
 """
 
 import csv
 import io
-import json
+import os
 from datetime import date, datetime
 import requests
 from flask import Flask, render_template_string, request, Response
@@ -14,7 +14,6 @@ app = Flask(__name__)
 
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
-
 
 HTML = """
 <!doctype html>
@@ -297,7 +296,7 @@ HTML = """
           <canvas id="weeklyChart"></canvas>
         </div>
         <p style="font-size:0.75rem;color:#9ca3af;margin-top:.75rem;">
-          X axis = fiscal week (week 1 starts Oct 1). Grey lines = prior 10 fiscal years (full year). Red line = current fiscal year up to requested end date.
+          X axis = fiscal week (week 1 starts Oct 1). Grey lines = prior 11 fiscal years (full year). Red line = current fiscal year up to requested end date.
         </p>
       </div>
       {% endif %}
@@ -365,7 +364,6 @@ HTML = """
           ids.forEach((id, i) => {
             const canvas = document.getElementById(id);
             if (!canvas) return;
-            // White background
             const out = document.createElement('canvas');
             out.width  = canvas.width;
             out.height = canvas.height;
@@ -508,7 +506,7 @@ HTML = """
           const locs   = sd.map(d => d.state);
           const zVals  = sd.map(d => d.ratio !== null ? d.ratio : 0);
           const texts  = sd.map(d => {
-            const r    = d.ratio !== null ? d.ratio.toFixed(2) + '\u00d7' : 'no history';
+            const r    = d.ratio !== null ? d.ratio.toFixed(2) + '×' : 'no history';
             const curr = '$' + (d.current / 1e6).toFixed(2) + 'M';
             const hist = d.avg_hist > 0 ? '$' + (d.avg_hist / 1e6).toFixed(2) + 'M avg' : 'no history';
             return '<b>' + d.state + '</b><br>Ratio: ' + r + '<br>Current: ' + curr + '<br>Hist avg: ' + hist;
@@ -653,7 +651,6 @@ HTML = """
 
 
 def shift_year(date_str: str, years: int) -> str:
-    """Shift a YYYY-MM-DD string back by `years` years, clamping Feb 29 → Feb 28."""
     d = date.fromisoformat(date_str)
     try:
         return d.replace(year=d.year - years).isoformat()
@@ -661,24 +658,7 @@ def shift_year(date_str: str, years: int) -> str:
         return d.replace(year=d.year - years, day=28).isoformat()
 
 
-def fetch_count(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> int:
-    """Return only the total number of matching grants (no records fetched)."""
-    criteria: dict = {
-        "agencies": [institute],
-        "award_notice_date": {"from_date": start_date, "to_date": end_date},
-    }
-    if award_types:
-        criteria["award_types"] = award_types
-    if po_name:
-        criteria["po_names"] = [{"any_name": po_name}]
-    payload = {"criteria": criteria, "offset": 0, "limit": 1}
-    resp = requests.post(API_URL, json=payload, timeout=60)
-    resp.raise_for_status()
-    return resp.json().get("meta", {}).get("total", 0)
-
-
-def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> tuple[int, float]:
-    """Return (count, total_award_amount) for the given period by paging through AwardAmount only."""
+def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> tuple:
     criteria: dict = {
         "agencies": [institute],
         "award_notice_date": {"from_date": start_date, "to_date": end_date},
@@ -717,7 +697,6 @@ def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award
 
 
 def fetch_state_amounts(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> dict:
-    """Return {state: total_award_amount} for the given period."""
     criteria: dict = {
         "agencies": [institute],
         "award_notice_date": {"from_date": start_date, "to_date": end_date},
@@ -758,12 +737,10 @@ def fetch_state_amounts(institute: str, start_date: str, end_date: str, award_ty
 
 
 def fiscal_year_start(d: date) -> date:
-    """Return Oct 1 that begins the fiscal year containing date d."""
     return date(d.year, 10, 1) if d.month >= 10 else date(d.year - 1, 10, 1)
 
 
-def fetch_dates_for_period(institute: str, start: date, end: date, award_types: list, po_name: str = "") -> list[str]:
-    """Return sorted list of award_notice_date strings (YYYY-MM-DD) for the period."""
+def fetch_dates_for_period(institute: str, start: date, end: date, award_types: list, po_name: str = "") -> list:
     criteria: dict = {
         "agencies": [institute],
         "award_notice_date": {"from_date": start.isoformat(), "to_date": end.isoformat()},
@@ -782,9 +759,9 @@ def fetch_dates_for_period(institute: str, start: date, end: date, award_types: 
         "sort_order": "asc",
     }
 
-    dates:       list[str] = []
-    fetched      = 0
-    total_count  = None
+    dates       = []
+    fetched     = 0
+    total_count = None
 
     while True:
         payload["offset"] = fetched
@@ -805,8 +782,7 @@ def fetch_dates_for_period(institute: str, start: date, end: date, award_types: 
     return sorted(dates)
 
 
-def dates_to_weekly_cumulative(dates: list[str], fy_start: date) -> list[int]:
-    """Convert sorted date strings to a 52-element cumulative-count array (index = fiscal week - 1)."""
+def dates_to_weekly_cumulative(dates: list, fy_start: date) -> list:
     weekly = [0] * 52
     for d_str in dates:
         d = date.fromisoformat(d_str)
@@ -818,7 +794,7 @@ def dates_to_weekly_cumulative(dates: list[str], fy_start: date) -> list[int]:
     return weekly
 
 
-def fetch_grants(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> list[dict]:
+def fetch_grants(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> list:
     criteria: dict = {
         "agencies": [institute],
         "award_notice_date": {
@@ -844,7 +820,7 @@ def fetch_grants(institute: str, start_date: str, end_date: str, award_types: li
         "sort_order": "asc",
     }
 
-    all_results: list[dict] = []
+    all_results = []
     while True:
         payload["offset"] = len(all_results)
         resp = requests.post(API_URL, json=payload, timeout=60)
@@ -886,7 +862,6 @@ def index():
             error = str(ex)
 
         if grants is not None:
-            # ── Year-over-year: count + amount (offsets 11 → 1, then current from grants) ──
             try:
                 year_comparison = []
                 for offset in range(11, 0, -1):
@@ -896,14 +871,12 @@ def index():
                     label = f"{s[:4]}–{e[:4]}" if s[:4] != e[:4] else s[:4]
                     year_comparison.append({"label": label, "count": count, "amount": amount, "current": False})
 
-                # Current year derived from already-fetched grants (no extra API call)
                 curr_amount = sum(g.get("award_amount") or 0 for g in grants)
                 curr_label  = f"{start_date[:4]}–{end_date[:4]}" if start_date[:4] != end_date[:4] else start_date[:4]
                 year_comparison.append({"label": curr_label, "count": len(grants), "amount": curr_amount, "current": True})
             except Exception:
-                year_comparison = None  # skip YoY charts if historical fetch fails
+                year_comparison = None
 
-            # ── Geographic state comparison ──
             try:
                 current_state: dict = {}
                 for g in grants:
@@ -911,8 +884,7 @@ def index():
                     state = (g.get("organization") or {}).get("org_state") or "Unknown"
                     current_state[state] = current_state.get(state, 0) + amt
 
-                # Historical 4 years (offsets 1–4 = roughly 2021–2024 relative to current)
-                hist_by_year: list[dict] = []
+                hist_by_year = []
                 for offset in range(1, 5):
                     s = shift_year(start_date, offset)
                     e = shift_year(end_date, offset)
@@ -933,16 +905,14 @@ def index():
                     })
                 state_comparison.sort(key=lambda x: (x["ratio"] is None, -(x["ratio"] or 0)))
             except Exception:
-                state_comparison = None  # skip state chart if historical fetch fails
+                state_comparison = None
 
-            # ── Weekly cumulative chart ──
             try:
                 fy_s        = fiscal_year_start(date.fromisoformat(start_date))
                 curr_end    = date.fromisoformat(end_date)
-                curr_wk_idx = min((curr_end - fy_s).days // 7, 51)  # last populated week (0-based)
+                curr_wk_idx = min((curr_end - fy_s).days // 7, 51)
 
                 weekly_chart = []
-                # 11 prior complete fiscal years (oldest first)
                 for yr_off in range(11, 0, -1):
                     hy_s = date(fy_s.year - yr_off, 10, 1)
                     hy_e = date(fy_s.year - yr_off + 1, 9, 30)
@@ -950,7 +920,6 @@ def index():
                     cum    = dates_to_weekly_cumulative(d_list, hy_s)
                     weekly_chart.append({"label": f"FY{hy_s.year + 1}", "data": cum, "current": False})
 
-                # Current fiscal year from Oct 1 to requested end_date
                 curr_dates = fetch_dates_for_period(institute, fy_s, curr_end, award_types, po_name)
                 curr_cum   = dates_to_weekly_cumulative(curr_dates, fy_s)
                 curr_data  = [curr_cum[i] if i <= curr_wk_idx else None for i in range(52)]
@@ -975,9 +944,9 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def download():
-    institute  = request.form.get("institute", "").strip().upper()
-    start_date = request.form.get("start_date", "")
-    end_date   = request.form.get("end_date", "")
+    institute   = request.form.get("institute", "").strip().upper()
+    start_date  = request.form.get("start_date", "")
+    end_date    = request.form.get("end_date", "")
     award_types = [int(v) for v in request.form.getlist("award_types")]
     po_name     = request.form.get("po_name", "").strip()
 
@@ -1015,5 +984,5 @@ def download():
 
 
 if __name__ == "__main__":
-    import os
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
