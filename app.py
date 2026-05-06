@@ -182,6 +182,7 @@ HTML = """
   <div>
     <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
     <span>Data from api.reporter.nih.gov</span>
+    <span> by Rui C Sá, May 2026 </span>
   </div>
 </header>
 
