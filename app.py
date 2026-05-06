@@ -237,21 +237,21 @@ HTML = """
   {% if grants is not none %}
     {% if grants %}
 
-      <!-- ── PO Charts ── -->
+      <!-- ── Weekly Cumulative Chart ── -->
+      {% if weekly_chart %}
       <div class="card" style="margin-top:2rem;">
         <div class="card-header">
-          <h2>Grants by Program Officer</h2>
-          <button class="btn-export" onclick="exportCharts(['poCountChart','poAmountChart'], 'po_charts_{{ institute }}_{{ start_date }}_{{ end_date }}')">&#8681; Export PNG</button>
+          <h2>Cumulative Grants by Fiscal Week <span style="font-size:.82rem;font-weight:400;color:#6b7280;">(Oct 1 – Sep 30, last 11 fiscal years)</span></h2>
+          <button class="btn-export" onclick="exportCharts(['weeklyChart'], 'weekly_chart_{{ institute }}_{{ start_date }}_{{ end_date }}')">&#8681; Export PNG</button>
         </div>
-        <div style="display:flex;gap:2rem;flex-wrap:wrap;">
-          <div style="flex:1;min-width:300px;max-height:380px;">
-            <canvas id="poCountChart"></canvas>
-          </div>
-          <div style="flex:1;min-width:300px;max-height:380px;">
-            <canvas id="poAmountChart"></canvas>
-          </div>
+        <div style="height:420px;">
+          <canvas id="weeklyChart"></canvas>
         </div>
+        <p style="font-size:0.75rem;color:#9ca3af;margin-top:.75rem;">
+          X axis = fiscal week (week 1 starts Oct 1). Grey lines = prior 11 fiscal years (full year). Red line = current fiscal year up to requested end date.
+        </p>
       </div>
+      {% endif %}
 
       <!-- ── Year-over-Year Comparison ── -->
       {% if year_comparison %}
@@ -271,6 +271,22 @@ HTML = """
       </div>
       {% endif %}
 
+      <!-- ── PO Charts ── -->
+      <div class="card" style="margin-top:2rem;">
+        <div class="card-header">
+          <h2>Grants by Program Officer</h2>
+          <button class="btn-export" onclick="exportCharts(['poCountChart','poAmountChart'], 'po_charts_{{ institute }}_{{ start_date }}_{{ end_date }}')">&#8681; Export PNG</button>
+        </div>
+        <div style="display:flex;gap:2rem;flex-wrap:wrap;">
+          <div style="flex:1;min-width:300px;max-height:380px;">
+            <canvas id="poCountChart"></canvas>
+          </div>
+          <div style="flex:1;min-width:300px;max-height:380px;">
+            <canvas id="poAmountChart"></canvas>
+          </div>
+        </div>
+      </div>
+
       <!-- ── Geographic Distribution ── -->
       {% if state_comparison %}
       <div class="card" style="margin-top:2rem;">
@@ -281,22 +297,6 @@ HTML = """
         <div id="stateMap" style="width:100%;height:440px;"></div>
         <p style="font-size:0.75rem;color:#9ca3af;margin-top:.75rem;">
           Color = current year ÷ historical average. Dark blue indicates above-average funding; light blue below average. Grey = no prior-year data.
-        </p>
-      </div>
-      {% endif %}
-
-      <!-- ── Weekly Cumulative Chart ── -->
-      {% if weekly_chart %}
-      <div class="card" style="margin-top:2rem;">
-        <div class="card-header">
-          <h2>Cumulative Grants by Fiscal Week <span style="font-size:.82rem;font-weight:400;color:#6b7280;">(Oct 1 – Sep 30, last 11 fiscal years)</span></h2>
-          <button class="btn-export" onclick="exportCharts(['weeklyChart'], 'weekly_chart_{{ institute }}_{{ start_date }}_{{ end_date }}')">&#8681; Export PNG</button>
-        </div>
-        <div style="height:420px;">
-          <canvas id="weeklyChart"></canvas>
-        </div>
-        <p style="font-size:0.75rem;color:#9ca3af;margin-top:.75rem;">
-          X axis = fiscal week (week 1 starts Oct 1). Grey lines = prior 11 fiscal years (full year). Red line = current fiscal year up to requested end date.
         </p>
       </div>
       {% endif %}
