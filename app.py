@@ -10,7 +10,10 @@ from datetime import date, datetime
 import requests
 from flask import Flask, render_template_string, request, Response
 
+from flask_caching import Cache
+
 app = Flask(__name__)
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 3600})
 
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
