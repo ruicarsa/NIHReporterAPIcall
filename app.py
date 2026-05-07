@@ -9,11 +9,10 @@ import os
 from datetime import date, datetime
 import requests
 from flask import Flask, render_template_string, request, Response
-
 from flask_caching import Cache
 
 app = Flask(__name__)
-cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 3600})
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 7200})
 
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
@@ -184,9 +183,9 @@ HTML = """
 <header>
   <div>
     <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
-    <span>Data from api.reporter.nih.gov</span>
-    <span> by Rui C Sá, May 2026 </span>
-    <span> Source code: https://github.com/ruicarsa/NIHReporterAPIcall </span>
+    <span>Data from api.reporter.nih.gov</span><br>
+    <span>Rui C Sá</span><br>
+    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a></span>
   </div>
 </header>
 
@@ -196,8 +195,8 @@ HTML = """
     <h2>Search Parameters</h2>
     <form method="post" onsubmit="document.getElementById('spinner').style.display='inline';">
       <div class="field">
-        <label>Institute</label>
-        <input name="institute" value="{{ institute }}" placeholder="e.g. NIBIB" required>
+        <label>Institute <span style="font-weight:400;text-transform:none;letter-spacing:0">(blank = all)</span></label>
+        <input name="institute" value="{{ institute }}" placeholder="e.g. NIBIB — leave blank for all">
       </div>
       <div class="field">
         <label>Start Date</label>
@@ -663,13 +662,13 @@ def shift_year(date_str: str, years: int) -> str:
         return d.replace(year=d.year - years, day=28).isoformat()
 
 
-def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> tuple:
-    criteria: dict = {
-        "agencies": [institute],
-        "award_notice_date": {"from_date": start_date, "to_date": end_date},
-    }
+@cache.memoize()
+def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> tuple:
+    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    if institute:
+        criteria["agencies"] = [institute]
     if award_types:
-        criteria["award_types"] = award_types
+        criteria["award_types"] = list(award_types)
     if po_name:
         criteria["po_names"] = [{"any_name": po_name}]
 
@@ -701,13 +700,13 @@ def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award
     return total_count or 0, total_amount
 
 
-def fetch_state_amounts(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> dict:
-    criteria: dict = {
-        "agencies": [institute],
-        "award_notice_date": {"from_date": start_date, "to_date": end_date},
-    }
+@cache.memoize()
+def fetch_state_amounts(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> dict:
+    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    if institute:
+        criteria["agencies"] = [institute]
     if award_types:
-        criteria["award_types"] = award_types
+        criteria["award_types"] = list(award_types)
     if po_name:
         criteria["po_names"] = [{"any_name": po_name}]
 
@@ -745,13 +744,13 @@ def fiscal_year_start(d: date) -> date:
     return date(d.year, 10, 1) if d.month >= 10 else date(d.year - 1, 10, 1)
 
 
-def fetch_dates_for_period(institute: str, start: date, end: date, award_types: list, po_name: str = "") -> list:
-    criteria: dict = {
-        "agencies": [institute],
-        "award_notice_date": {"from_date": start.isoformat(), "to_date": end.isoformat()},
-    }
+@cache.memoize()
+def fetch_dates_for_period(institute: str, start: date, end: date, award_types: tuple, po_name: str = "") -> list:
+    criteria: dict = {"award_notice_date": {"from_date": start.isoformat(), "to_date": end.isoformat()}}
+    if institute:
+        criteria["agencies"] = [institute]
     if award_types:
-        criteria["award_types"] = award_types
+        criteria["award_types"] = list(award_types)
     if po_name:
         criteria["po_names"] = [{"any_name": po_name}]
 
@@ -799,16 +798,13 @@ def dates_to_weekly_cumulative(dates: list, fy_start: date) -> list:
     return weekly
 
 
-def fetch_grants(institute: str, start_date: str, end_date: str, award_types: list, po_name: str = "") -> list:
-    criteria: dict = {
-        "agencies": [institute],
-        "award_notice_date": {
-            "from_date": start_date,
-            "to_date":   end_date,
-        },
-    }
+@cache.memoize()
+def fetch_grants(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> list:
+    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    if institute:
+        criteria["agencies"] = [institute]
     if award_types:
-        criteria["award_types"] = award_types
+        criteria["award_types"] = list(award_types)
     if po_name:
         criteria["po_names"] = [{"any_name": po_name}]
 
@@ -842,7 +838,7 @@ def fetch_grants(institute: str, start_date: str, end_date: str, award_types: li
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    institute        = "NIBIB"
+    institute        = ""
     start_date       = "2025-10-01"
     end_date         = datetime.today().strftime("%Y-%m-%d")
     award_types      = [1]
@@ -857,7 +853,7 @@ def index():
         institute   = request.form.get("institute", "").strip().upper()
         start_date  = request.form.get("start_date", "")
         end_date    = request.form.get("end_date", "")
-        award_types = [int(v) for v in request.form.getlist("award_types")]
+        award_types = tuple(int(v) for v in request.form.getlist("award_types"))
         po_name     = request.form.get("po_name", "").strip()
         try:
             grants = fetch_grants(institute, start_date, end_date, award_types, po_name)
@@ -952,7 +948,7 @@ def download():
     institute   = request.form.get("institute", "").strip().upper()
     start_date  = request.form.get("start_date", "")
     end_date    = request.form.get("end_date", "")
-    award_types = [int(v) for v in request.form.getlist("award_types")]
+    award_types = tuple(int(v) for v in request.form.getlist("award_types"))
     po_name     = request.form.get("po_name", "").strip()
 
     grants = fetch_grants(institute, start_date, end_date, award_types, po_name)
