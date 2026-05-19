@@ -185,7 +185,7 @@ HTML = """
     <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
     <span>Data from api.reporter.nih.gov</span><br>
     <span>Rui C Sá</span><br>
-    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a></span>
+    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.1</span>
   </div>
 </header>
 
