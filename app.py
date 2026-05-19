@@ -12,7 +12,7 @@ from flask import Flask, render_template_string, request, Response
 from flask_caching import Cache
 
 app = Flask(__name__)
-cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 7200})
+cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 3600})
 
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
@@ -195,8 +195,8 @@ HTML = """
     <h2>Search Parameters</h2>
     <form method="post" onsubmit="document.getElementById('spinner').style.display='inline';">
       <div class="field">
-        <label>Institute <span style="font-weight:400;text-transform:none;letter-spacing:0">(blank = all)</span></label>
-        <input name="institute" value="{{ institute }}" placeholder="e.g. NIBIB — leave blank for all">
+        <label>Institute <span style="font-weight:400;text-transform:none;letter-spacing:0">(blank = all; semicolon-separated for multiple)</span></label>
+        <input name="institute" value="{{ institute }}" placeholder="e.g. NIBIB;NCI — blank for all" style="min-width:240px;">
       </div>
       <div class="field">
         <label>Start Date</label>
@@ -207,8 +207,8 @@ HTML = """
         <input type="date" name="end_date" value="{{ end_date }}" required>
       </div>
       <div class="field">
-        <label>Program Officer <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-        <input name="po_name" value="{{ po_name }}" placeholder="Last name or full name">
+        <label>Program Officer <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional; semicolon-separated for multiple)</span></label>
+        <input name="po_name" value="{{ po_name }}" placeholder="e.g. Smith;Jones" style="min-width:240px;">
       </div>
       <div class="field">
         <label>Award Type</label>
@@ -662,81 +662,92 @@ def shift_year(date_str: str, years: int) -> str:
         return d.replace(year=d.year - years, day=28).isoformat()
 
 
+def _parse_multi(value: str, uppercase: bool = False) -> list:
+    """Split a semicolon-separated string into a list of trimmed parts. Empty input → [""]"""
+    parts = [v.strip() for v in (value or "").split(";") if v.strip()]
+    if uppercase:
+        parts = [p.upper() for p in parts]
+    return parts or [""]
+
+
+# Field-set keys used by _fetch_single (kept short so they hash cheaply in cache).
+_FIELD_SETS = {
+    "grants": ("ProjectNum", "ProjectTitle", "AwardAmount", "AwardNoticeDate",
+               "ProjectStartDate", "PrincipalInvestigators", "ProgramOfficers", "Organization"),
+    "amount": ("ProjectNum", "AwardAmount"),
+    "state":  ("ProjectNum", "AwardAmount", "Organization"),
+    "dates":  ("ProjectNum", "AwardNoticeDate"),
+}
+
+
 @cache.memoize()
-def fetch_count_and_amount(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> tuple:
+def _fetch_single(institute: str, po: str, start_date: str, end_date: str,
+                  award_types: tuple, fields_key: str) -> list:
+    """Fetch all results for a SINGLE (IC, PO) combination. Cached per arg-set."""
     criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
     if institute:
         criteria["agencies"] = [institute]
     if award_types:
         criteria["award_types"] = list(award_types)
-    if po_name:
-        criteria["po_names"] = [{"any_name": po_name}]
+    if po:
+        criteria["po_names"] = [{"any_name": po}]
 
-    payload = {
+    payload: dict = {
         "criteria": criteria,
-        "include_fields": ["AwardAmount"],
+        "include_fields": list(_FIELD_SETS[fields_key]),
         "offset": 0,
         "limit": PAGE_SIZE,
     }
+    if fields_key in ("grants", "dates"):
+        payload["sort_field"] = "award_notice_date"
+        payload["sort_order"] = "asc"
 
-    total_count  = None
-    total_amount = 0.0
-    fetched      = 0
-
+    out   = []
+    total = None
     while True:
-        payload["offset"] = fetched
+        payload["offset"] = len(out)
         resp = requests.post(API_URL, json=payload, timeout=60)
         resp.raise_for_status()
         data    = resp.json()
         results = data.get("results", [])
-        if total_count is None:
-            total_count = data.get("meta", {}).get("total", 0)
-        for g in results:
-            total_amount += g.get("award_amount") or 0
-        fetched += len(results)
-        if fetched >= (total_count or 0) or not results:
+        if total is None:
+            total = data.get("meta", {}).get("total", 0)
+        out.extend(results)
+        if len(out) >= (total or 0) or not results:
             break
+    return out
 
-    return total_count or 0, total_amount
+
+def _fetch_union(institute: str, start_date: str, end_date: str,
+                 award_types: tuple, po_name: str, fields_key: str) -> list:
+    """One API call per (IC, PO) combination. Returns deduplicated union (OR logic)."""
+    institutes = _parse_multi(institute, uppercase=True)
+    po_names   = _parse_multi(po_name)
+
+    seen = set()
+    out  = []
+    for inst in institutes:
+        for po in po_names:
+            for g in _fetch_single(inst, po, start_date, end_date, award_types, fields_key):
+                key = g.get("project_num") or g.get("appl_id") or id(g)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(g)
+    return out
 
 
-@cache.memoize()
-def fetch_state_amounts(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> dict:
-    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
-    if institute:
-        criteria["agencies"] = [institute]
-    if award_types:
-        criteria["award_types"] = list(award_types)
-    if po_name:
-        criteria["po_names"] = [{"any_name": po_name}]
+def fetch_count_and_amount(institute, start_date, end_date, award_types, po_name=""):
+    results = _fetch_union(institute, start_date, end_date, award_types, po_name, "amount")
+    return len(results), sum(g.get("award_amount") or 0 for g in results)
 
-    payload = {
-        "criteria": criteria,
-        "include_fields": ["AwardAmount", "Organization"],
-        "offset": 0,
-        "limit": PAGE_SIZE,
-    }
 
+def fetch_state_amounts(institute, start_date, end_date, award_types, po_name=""):
+    results = _fetch_union(institute, start_date, end_date, award_types, po_name, "state")
     state_amounts: dict = {}
-    fetched      = 0
-    total_count  = None
-
-    while True:
-        payload["offset"] = fetched
-        resp = requests.post(API_URL, json=payload, timeout=60)
-        resp.raise_for_status()
-        data    = resp.json()
-        results = data.get("results", [])
-        if total_count is None:
-            total_count = data.get("meta", {}).get("total", 0)
-        for g in results:
-            amt   = g.get("award_amount") or 0
-            state = (g.get("organization") or {}).get("org_state") or "Unknown"
-            state_amounts[state] = state_amounts.get(state, 0) + amt
-        fetched += len(results)
-        if fetched >= (total_count or 0) or not results:
-            break
-
+    for g in results:
+        amt   = g.get("award_amount") or 0
+        state = (g.get("organization") or {}).get("org_state") or "Unknown"
+        state_amounts[state] = state_amounts.get(state, 0) + amt
     return state_amounts
 
 
@@ -744,45 +755,10 @@ def fiscal_year_start(d: date) -> date:
     return date(d.year, 10, 1) if d.month >= 10 else date(d.year - 1, 10, 1)
 
 
-@cache.memoize()
-def fetch_dates_for_period(institute: str, start: date, end: date, award_types: tuple, po_name: str = "") -> list:
-    criteria: dict = {"award_notice_date": {"from_date": start.isoformat(), "to_date": end.isoformat()}}
-    if institute:
-        criteria["agencies"] = [institute]
-    if award_types:
-        criteria["award_types"] = list(award_types)
-    if po_name:
-        criteria["po_names"] = [{"any_name": po_name}]
-
-    payload = {
-        "criteria": criteria,
-        "include_fields": ["AwardNoticeDate"],
-        "offset": 0,
-        "limit": PAGE_SIZE,
-        "sort_field": "award_notice_date",
-        "sort_order": "asc",
-    }
-
-    dates       = []
-    fetched     = 0
-    total_count = None
-
-    while True:
-        payload["offset"] = fetched
-        resp = requests.post(API_URL, json=payload, timeout=60)
-        resp.raise_for_status()
-        data    = resp.json()
-        results = data.get("results", [])
-        if total_count is None:
-            total_count = data.get("meta", {}).get("total", 0)
-        for g in results:
-            d = g.get("award_notice_date")
-            if d:
-                dates.append(d[:10])
-        fetched += len(results)
-        if fetched >= (total_count or 0) or not results:
-            break
-
+def fetch_dates_for_period(institute, start: date, end: date, award_types, po_name=""):
+    results = _fetch_union(institute, start.isoformat(), end.isoformat(),
+                           award_types, po_name, "dates")
+    dates = [g["award_notice_date"][:10] for g in results if g.get("award_notice_date")]
     return sorted(dates)
 
 
@@ -798,42 +774,9 @@ def dates_to_weekly_cumulative(dates: list, fy_start: date) -> list:
     return weekly
 
 
-@cache.memoize()
-def fetch_grants(institute: str, start_date: str, end_date: str, award_types: tuple, po_name: str = "") -> list:
-    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
-    if institute:
-        criteria["agencies"] = [institute]
-    if award_types:
-        criteria["award_types"] = list(award_types)
-    if po_name:
-        criteria["po_names"] = [{"any_name": po_name}]
-
-    payload = {
-        "criteria": criteria,
-        "include_fields": [
-            "ProjectNum", "ProjectTitle",
-            "AwardAmount", "AwardNoticeDate", "ProjectStartDate",
-            "PrincipalInvestigators", "ProgramOfficers", "Organization",
-        ],
-        "offset":     0,
-        "limit":      PAGE_SIZE,
-        "sort_field": "award_notice_date",
-        "sort_order": "asc",
-    }
-
-    all_results = []
-    while True:
-        payload["offset"] = len(all_results)
-        resp = requests.post(API_URL, json=payload, timeout=60)
-        resp.raise_for_status()
-        data    = resp.json()
-        results = data.get("results", [])
-        total   = data.get("meta", {}).get("total", 0)
-        all_results.extend(results)
-        if len(all_results) >= total or not results:
-            break
-
-    return all_results
+def fetch_grants(institute, start_date, end_date, award_types, po_name=""):
+    results = _fetch_union(institute, start_date, end_date, award_types, po_name, "grants")
+    return sorted(results, key=lambda g: g.get("award_notice_date") or "")
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -850,7 +793,7 @@ def index():
     error            = None
 
     if request.method == "POST":
-        institute   = request.form.get("institute", "").strip().upper()
+        institute   = request.form.get("institute", "").strip()
         start_date  = request.form.get("start_date", "")
         end_date    = request.form.get("end_date", "")
         award_types = tuple(int(v) for v in request.form.getlist("award_types"))
@@ -945,7 +888,7 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def download():
-    institute   = request.form.get("institute", "").strip().upper()
+    institute   = request.form.get("institute", "").strip()
     start_date  = request.form.get("start_date", "")
     end_date    = request.form.get("end_date", "")
     award_types = tuple(int(v) for v in request.form.getlist("award_types"))
