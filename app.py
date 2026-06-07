@@ -6,16 +6,26 @@ Render deployment version
 import csv
 import io
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import requests
 from flask import Flask, render_template_string, request, Response
 from flask_caching import Cache
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 3600})
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["120 per hour", "30 per minute"],
+)
 
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
+
+# Cap on how many (institute × program-officer) combinations a single request may fan out to.
+MAX_COMBOS = 20
 
 HTML = """
 <!doctype html>
@@ -185,7 +195,7 @@ HTML = """
     <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
     <span>Data from api.reporter.nih.gov</span><br>
     <span>Rui C Sá</span><br>
-    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.1</span>
+    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.2</span>
   </div>
 </header>
 
@@ -673,7 +683,8 @@ def _parse_multi(value: str, uppercase: bool = False) -> list:
 # Field-set keys used by _fetch_single (kept short so they hash cheaply in cache).
 _FIELD_SETS = {
     "grants": ("ProjectNum", "ProjectTitle", "AwardAmount", "AwardNoticeDate",
-               "ProjectStartDate", "PrincipalInvestigators", "ProgramOfficers", "Organization"),
+               "ProjectStartDate", "ProjectEndDate", "BudgetStart", "BudgetEnd",
+               "PrincipalInvestigators", "ProgramOfficers", "Organization"),
     "amount": ("ProjectNum", "AwardAmount"),
     "state":  ("ProjectNum", "AwardAmount", "Organization"),
     "dates":  ("ProjectNum", "AwardNoticeDate"),
@@ -724,6 +735,13 @@ def _fetch_union(institute: str, start_date: str, end_date: str,
     institutes = _parse_multi(institute, uppercase=True)
     po_names   = _parse_multi(po_name)
 
+    if len(institutes) * len(po_names) > MAX_COMBOS:
+        raise ValueError(
+            f"Too many combinations requested ({len(institutes)} institutes × "
+            f"{len(po_names)} program officers = {len(institutes) * len(po_names)}). "
+            f"Please narrow your search to at most {MAX_COMBOS} combinations."
+        )
+
     seen = set()
     out  = []
     for inst in institutes:
@@ -771,6 +789,76 @@ def dates_to_weekly_cumulative(dates: list, fy_start: date) -> list:
             weekly[idx] += 1
     for i in range(1, 52):
         weekly[i] += weekly[i - 1]
+    return weekly
+
+
+# NIH RePORTER rejects any query where offset + limit > 15,000, so paging through
+# every record fails for very large ICs / all-of-NIH. Reading meta.total never paginates
+# deep, so we use record-paging only when the period is small enough, and fall back to
+# per-week count queries otherwise. PAGE_CAP keeps us safely under the 15,000 ceiling.
+PAGE_CAP = 14000
+
+
+@cache.memoize()
+def _count_single(institute: str, po: str, start_date: str, end_date: str,
+                  award_types: tuple) -> int:
+    """Total number of matching grants for a single (IC, PO) combo. Reads meta.total only."""
+    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    if institute:
+        criteria["agencies"] = [institute]
+    if award_types:
+        criteria["award_types"] = list(award_types)
+    if po:
+        criteria["po_names"] = [{"any_name": po}]
+    payload = {"criteria": criteria, "include_fields": ["ProjectNum"], "offset": 0, "limit": 1}
+    resp = requests.post(API_URL, json=payload, timeout=60)
+    resp.raise_for_status()
+    return resp.json().get("meta", {}).get("total", 0)
+
+
+@cache.memoize()
+def weekly_cumulative_series(institute: str, fy_start_iso: str, end_iso: str,
+                            award_types: tuple, po_name: str) -> list:
+    """Return a 52-element cumulative grant-count array for one fiscal year.
+
+    Cap-safe: pages records when the period is small, otherwise issues per-week
+    count queries (which never trigger the API's deep-pagination limit).
+    """
+    institutes = _parse_multi(institute, uppercase=True)
+    po_names   = _parse_multi(po_name)
+    if len(institutes) * len(po_names) > MAX_COMBOS:
+        raise ValueError(
+            f"Too many combinations requested ({len(institutes)} × {len(po_names)}). "
+            f"Please narrow your search to at most {MAX_COMBOS} combinations."
+        )
+
+    fy_start = date.fromisoformat(fy_start_iso)
+    end      = date.fromisoformat(end_iso)
+
+    # Upper-bound the size to choose a strategy (summed across combos).
+    total_upper = sum(_count_single(i, p, fy_start_iso, end_iso, award_types)
+                      for i in institutes for p in po_names)
+
+    if total_upper <= PAGE_CAP:
+        # Fast path: page the actual records and bucket their notice dates (dedup by project_num).
+        dates = fetch_dates_for_period(institute, fy_start, end, award_types, po_name)
+        return dates_to_weekly_cumulative(dates, fy_start)
+
+    # Large path: cumulative counts via meta.total, one query per week (cap-safe).
+    weekly = [0] * 52
+    for w in range(52):
+        wk_end = fy_start + timedelta(days=7 * (w + 1) - 1)
+        if wk_end > end:
+            wk_end = end
+        if wk_end < fy_start:
+            continue
+        weekly[w] = sum(_count_single(i, p, fy_start_iso, wk_end.isoformat(), award_types)
+                        for i in institutes for p in po_names)
+        if wk_end >= end:
+            # remaining weeks are all "up to end" → same cumulative total
+            for rest in range(w + 1, 52):
+                weekly[rest] = weekly[w]
+            break
     return weekly
 
 
@@ -860,13 +948,13 @@ def index():
                 for yr_off in range(11, 0, -1):
                     hy_s = date(fy_s.year - yr_off, 10, 1)
                     hy_e = date(fy_s.year - yr_off + 1, 9, 30)
-                    d_list = fetch_dates_for_period(institute, hy_s, hy_e, award_types, po_name)
-                    cum    = dates_to_weekly_cumulative(d_list, hy_s)
+                    cum  = weekly_cumulative_series(institute, hy_s.isoformat(), hy_e.isoformat(),
+                                                    award_types, po_name)
                     weekly_chart.append({"label": f"FY{hy_s.year + 1}", "data": cum, "current": False})
 
-                curr_dates = fetch_dates_for_period(institute, fy_s, curr_end, award_types, po_name)
-                curr_cum   = dates_to_weekly_cumulative(curr_dates, fy_s)
-                curr_data  = [curr_cum[i] if i <= curr_wk_idx else None for i in range(52)]
+                curr_cum  = weekly_cumulative_series(institute, fy_s.isoformat(), curr_end.isoformat(),
+                                                     award_types, po_name)
+                curr_data = [curr_cum[i] if i <= curr_wk_idx else None for i in range(52)]
                 weekly_chart.append({"label": f"FY{fy_s.year + 1}", "data": curr_data, "current": True})
             except Exception:
                 weekly_chart = None
@@ -901,7 +989,9 @@ def download():
     writer.writerow([
         "Grant Number", "Title", "Principal Investigator(s)",
         "Program Officer", "Organization", "Award ($)",
-        "Notice Date", "Start Date",
+        "Award Notice Date",
+        "Project Start Date", "Project End Date",
+        "Budget Start Date", "Budget End Date",
     ])
     for g in grants:
         pis = ", ".join(
@@ -917,6 +1007,9 @@ def download():
             g.get("award_amount", ""),
             (g.get("award_notice_date") or "")[:10],
             (g.get("project_start_date") or "")[:10],
+            (g.get("project_end_date") or "")[:10],
+            (g.get("budget_start") or "")[:10],
+            (g.get("budget_end") or "")[:10],
         ])
 
     filename = f"grants_{institute}_{start_date}_{end_date}.csv"
