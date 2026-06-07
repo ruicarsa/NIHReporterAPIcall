@@ -195,7 +195,7 @@ HTML = """
     <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
     <span>Data from api.reporter.nih.gov</span><br>
     <span>Rui C Sá</span><br>
-    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.2</span>
+    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.2.1</span>
   </div>
 </header>
 
@@ -844,21 +844,48 @@ def weekly_cumulative_series(institute: str, fy_start_iso: str, end_iso: str,
         dates = fetch_dates_for_period(institute, fy_start, end, award_types, po_name)
         return dates_to_weekly_cumulative(dates, fy_start)
 
-    # Large path: cumulative counts via meta.total, one query per week (cap-safe).
-    weekly = [0] * 52
+    # Large path (cap-safe). Strategy depends on number of (IC × PO) combinations.
+    if len(institutes) * len(po_names) == 1:
+        # Single combo: cumulative meta.total counts, one query per week. Exact and cheap.
+        inst, po = institutes[0], po_names[0]
+        weekly = [0] * 52
+        for w in range(52):
+            wk_end = fy_start + timedelta(days=7 * (w + 1) - 1)
+            if wk_end > end:
+                wk_end = end
+            if wk_end < fy_start:
+                continue
+            weekly[w] = _count_single(inst, po, fy_start_iso, wk_end.isoformat(), award_types)
+            if wk_end >= end:
+                for rest in range(w + 1, 52):
+                    weekly[rest] = weekly[w]
+                break
+        return weekly
+
+    # Multiple combos: dedupe project numbers within each week, then accumulate.
+    # Each single week is small enough to page fully, so this stays under the API cap
+    # while counting grants matching more than one program officer only once.
+    incremental = [0] * 52
     for w in range(52):
+        wk_start = fy_start + timedelta(days=7 * w)
+        if wk_start > end:
+            break
         wk_end = fy_start + timedelta(days=7 * (w + 1) - 1)
         if wk_end > end:
             wk_end = end
-        if wk_end < fy_start:
-            continue
-        weekly[w] = sum(_count_single(i, p, fy_start_iso, wk_end.isoformat(), award_types)
-                        for i in institutes for p in po_names)
-        if wk_end >= end:
-            # remaining weeks are all "up to end" → same cumulative total
-            for rest in range(w + 1, 52):
-                weekly[rest] = weekly[w]
-            break
+        seen_week: set = set()
+        for inst in institutes:
+            for po in po_names:
+                for g in _fetch_single(inst, po, wk_start.isoformat(), wk_end.isoformat(),
+                                       award_types, "dates"):
+                    seen_week.add(g.get("project_num") or g.get("appl_id") or id(g))
+        incremental[w] = len(seen_week)
+
+    weekly = [0] * 52
+    running = 0
+    for w in range(52):
+        running += incremental[w]
+        weekly[w] = running
     return weekly
 
 
