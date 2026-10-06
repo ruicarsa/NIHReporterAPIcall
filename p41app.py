@@ -1,6 +1,7 @@
 """
-NIH RePORTER – Flask web interface
-Render deployment version
+NIH RePORTER – NIBIB P41 Explorer
+Fork of the main explorer restricted to NIBIB P41 Biomedical Technology
+Resource Centers. Render deployment version (start command: gunicorn p41app:app).
 """
 
 import csv
@@ -24,6 +25,11 @@ limiter = Limiter(
 API_URL   = "https://api.reporter.nih.gov/v2/projects/search"
 PAGE_SIZE = 500
 
+# This app is a restricted fork of the main explorer: NIBIB P41 Biomedical
+# Technology Resource Centers only. Institute and activity code are fixed.
+INSTITUTE     = "NIBIB"
+ACTIVITY_CODE = "P41"
+
 # Cap on how many (institute × program-officer) combinations a single request may fan out to.
 MAX_COMBOS = 20
 
@@ -33,7 +39,7 @@ HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NIH RePORTER – New Grants</title>
+  <title>NIH RePORTER – NIBIB P41s</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
   <style>
@@ -192,10 +198,10 @@ HTML = """
 
 <header>
   <div>
-    <h1>NIH RePORTER &nbsp;·&nbsp; New Grant Explorer</h1>
-    <span>Data from api.reporter.nih.gov</span><br>
+    <h1>NIH RePORTER &nbsp;·&nbsp; NIBIB P41 Explorer</h1>
+    <span>Data from api.reporter.nih.gov &nbsp;·&nbsp; restricted to NIBIB P41 Biomedical Technology Resource Centers</span><br>
     <span>Rui C Sá</span><br>
-    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; v1.3</span>
+    <span><a href="https://github.com/ruicarsa/NIHReporterAPIcall" target="_blank" style="color:#a8c8e8;text-decoration:none;">Source code on GitHub</a> &nbsp;·&nbsp; P41 v1.0</span>
   </div>
 </header>
 
@@ -205,20 +211,12 @@ HTML = """
     <h2>Search Parameters</h2>
     <form method="post" onsubmit="document.getElementById('spinner').style.display='inline';">
       <div class="field">
-        <label>Institute <span style="font-weight:400;text-transform:none;letter-spacing:0">(blank = all; semicolon-separated for multiple)</span></label>
-        <input name="institute" value="{{ institute }}" placeholder="e.g. NIBIB;NCI — blank for all" style="min-width:240px;">
-      </div>
-      <div class="field">
         <label>Start Date</label>
         <input type="date" name="start_date" value="{{ start_date }}" required>
       </div>
       <div class="field">
         <label>End Date</label>
         <input type="date" name="end_date" value="{{ end_date }}" required>
-      </div>
-      <div class="field">
-        <label>Program Officer <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional; semicolon-separated for multiple)</span></label>
-        <input name="po_name" value="{{ po_name }}" placeholder="e.g. Smith;Jones" style="min-width:240px;">
       </div>
       <div class="field">
         <label>Award Type</label>
@@ -318,14 +316,12 @@ HTML = """
       <!-- ── Results Table ── -->
       <div class="results-card">
         <div class="results-header">
-          <h2>Results for <strong>{{ institute }}</strong>{% if po_name %} · PO: <strong>{{ po_name }}</strong>{% endif %} &nbsp;|&nbsp; {{ start_date }} → {{ end_date }}</h2>
+          <h2>Results for <strong>{{ institute }} P41</strong> &nbsp;|&nbsp; {{ start_date }} → {{ end_date }}</h2>
           <div style="display:flex;align-items:center;gap:.75rem;">
             <span class="badge">{{ grants|length }} grants</span>
             <form method="post" action="/download" style="margin:0;">
-              <input type="hidden" name="institute"  value="{{ institute }}">
               <input type="hidden" name="start_date" value="{{ start_date }}">
               <input type="hidden" name="end_date"   value="{{ end_date }}">
-              <input type="hidden" name="po_name"    value="{{ po_name }}">
               {% for t in award_types %}<input type="hidden" name="award_types" value="{{ t }}">{% endfor %}
               <button type="submit" class="btn-download">&#8681; Download CSV</button>
             </form>
@@ -704,7 +700,13 @@ _FIELD_SETS = {
 def _fetch_single(institute: str, po: str, start_date: str, end_date: str,
                   award_types: tuple, fields_key: str) -> list:
     """Fetch all results for a SINGLE (IC, PO) combination. Cached per arg-set."""
-    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    criteria: dict = {
+        "award_notice_date": {"from_date": start_date, "to_date": end_date},
+        "activity_codes": [ACTIVITY_CODE],
+        # P41 centers contain subprojects (TRDs), each returned as its own record
+        # with a partial award amount. One parent record per center instead.
+        "exclude_subprojects": True,
+    }
     if institute:
         criteria["agencies"] = [institute]
     if award_types:
@@ -812,7 +814,12 @@ PAGE_CAP = 14000
 def _count_single(institute: str, po: str, start_date: str, end_date: str,
                   award_types: tuple) -> int:
     """Total number of matching grants for a single (IC, PO) combo. Reads meta.total only."""
-    criteria: dict = {"award_notice_date": {"from_date": start_date, "to_date": end_date}}
+    criteria: dict = {
+        "award_notice_date": {"from_date": start_date, "to_date": end_date},
+        "activity_codes": [ACTIVITY_CODE],
+        # Count one parent record per center, not each TRD subproject.
+        "exclude_subprojects": True,
+    }
     if institute:
         criteria["agencies"] = [institute]
     if award_types:
@@ -905,11 +912,11 @@ def fetch_grants(institute, start_date, end_date, award_types, po_name=""):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    institute        = ""
+    institute        = INSTITUTE          # fixed: NIBIB
     start_date       = "2026-10-01"
     end_date         = datetime.today().strftime("%Y-%m-%d")
-    award_types      = [1]
-    po_name          = ""
+    award_types      = [1, 2, 5]
+    po_name          = ""                 # fixed: no PO filter
     grants           = None
     year_comparison  = None
     state_comparison = None
@@ -917,11 +924,9 @@ def index():
     error            = None
 
     if request.method == "POST":
-        institute   = request.form.get("institute", "").strip()
         start_date  = request.form.get("start_date", "")
         end_date    = request.form.get("end_date", "")
         award_types = tuple(int(v) for v in request.form.getlist("award_types"))
-        po_name     = request.form.get("po_name", "").strip()
         try:
             grants = fetch_grants(institute, start_date, end_date, award_types, po_name)
         except requests.HTTPError as ex:
@@ -1012,11 +1017,11 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def download():
-    institute   = request.form.get("institute", "").strip()
+    institute   = INSTITUTE               # fixed: NIBIB
     start_date  = request.form.get("start_date", "")
     end_date    = request.form.get("end_date", "")
     award_types = tuple(int(v) for v in request.form.getlist("award_types"))
-    po_name     = request.form.get("po_name", "").strip()
+    po_name     = ""                      # fixed: no PO filter
 
     grants = fetch_grants(institute, start_date, end_date, award_types, po_name)
 
@@ -1048,7 +1053,7 @@ def download():
             (g.get("budget_end") or "")[:10],
         ])
 
-    filename = f"grants_{institute}_{start_date}_{end_date}.csv"
+    filename = f"grants_{institute}_P41_{start_date}_{end_date}.csv"
     return Response(
         buf.getvalue(),
         mimetype="text/csv",
@@ -1057,5 +1062,5 @@ def download():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5005))
     app.run(host="0.0.0.0", port=port, debug=False)
